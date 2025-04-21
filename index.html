@@ -5,61 +5,73 @@
     <title>Catch the Mouse</title>
     <style>
       body {
-        text-align: center;
-        font-family: sans-serif;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
       }
       canvas {
-        border: 1px solid #333;
-        background: #fafafa;
         display: block;
-        margin: 1em auto;
       }
-      #info {
-        margin-bottom: 0.5em;
-      }
-      #info span {
-        margin: 0 1em;
+      #mobileMessage {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.8);
+        color: white;
+        font-size: 24px;
+        text-align: center;
+        padding-top: 50vh;
+        z-index: 1000;
       }
     </style>
   </head>
   <body>
-    <div id="info">
-      <span>Level: <strong id="level">1</strong></span>
-      <span>Top Speed: <strong id="topSpeed">—</strong> px/frame</span>
-    </div>
-    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div id="mobileMessage">This game is not supported on mobile devices.</div>
+    <canvas id="gameCanvas"></canvas>
 
     <script>
       (function () {
-        // ── CONFIG ─────────────────────────────────────────────────────
-        const BASE_SPEED = 1.0; // px/frame @ level 1
-        const SPEED_INC = 0.5; // +px/frame per level
-        const CATCH_DIST = 15; // px to catch
-        const CURSOR_RADIUS = 6; // px
+        // Check if the user is on a mobile device
+        if (/Mobi|Android|iPhone/i.test(navigator.userAgent)) {
+          document.getElementById("mobileMessage").style.display = "block";
+          return;
+        }
 
-        // WALL PARAMETERS
+        // Game Configuration
+        const BASE_SPEED = 1.0; // Mouse speed at level 1 (px/frame)
+        const SPEED_INC = 0.5; // Speed increase per level
+        const CATCH_DIST = 15; // Distance to catch the mouse (px)
+        const CURSOR_RADIUS = 6; // Cursor size (px)
+
+        // Wall Parameters
         const MARGIN = 40;
         const NUM_WALLS = 12;
         const MIN_LEN = 120;
         const MAX_LEN = 240;
-        const MIN_SEP = 60; // was 30 → larger overall gap
-        const MIN_SEP_PARALLEL = 120; // extra gap for parallel lines
+        const MIN_SEP = 60;
         const ORIENTS = [0, 45, 90, 135].map((d) => (d * Math.PI) / 180);
-        const ANG_THRESH = (5 * Math.PI) / 180; // 5° tolerance
 
-        // BOUNDARY AVOIDANCE
+        // Boundary Avoidance
         const BOUND_AVOID = 80;
         const BOUND_FORCE = 1.5;
 
-        // VELOCITY SMOOTHING
+        // Velocity Smoothing
         const SMOOTHING_FACTOR = 0.8;
 
-        // ── CANVAS & STATE ────────────────────────────────────────────
+        // Canvas Setup
         const canvas = document.getElementById("gameCanvas"),
-          ctx = canvas.getContext("2d"),
-          W = canvas.width,
+          ctx = canvas.getContext("2d");
+
+        // Set canvas to full screen
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        let W = canvas.width,
           H = canvas.height;
 
+        // Game State Variables
         let level = 1,
           topSpeed = BASE_SPEED,
           walls = [],
@@ -68,17 +80,17 @@
           cursorPos = { x: 0, y: 0 },
           lastCursor = { x: 0, y: 0, t: performance.now() },
           cursorSpeed = 0,
-          allowCatch = false;
+          allowCatch = false,
+          gameState = "playing",
+          levelCompleteStart = null,
+          gameOverStart = null,
+          levelStartTime = null;
 
-        // Wander
+        // Mouse Wander Variables
         let wanderTarget = { x: W / 2, y: H / 2 },
           wanderTime = 0;
 
-        // UI refs
-        const levelEl = document.getElementById("level"),
-          topSpeedEl = document.getElementById("topSpeed");
-
-        // ── UTILS ──────────────────────────────────────────────────────
+        // Utility Functions
         const rand = (a, b) => a + Math.random() * (b - a);
 
         function segIntersect(p1, p2, p3, p4) {
@@ -102,7 +114,6 @@
           return Math.hypot(p.x - cx, p.y - cy);
         }
 
-        // reflect velocity off wall's normal
         function reflectVelocity(vel, wall) {
           const wx = wall.B.x - wall.A.x,
             wy = wall.B.y - wall.A.y;
@@ -110,17 +121,13 @@
           const nx = -wy / len,
             ny = wx / len;
           const dot = vel.x * nx + vel.y * ny;
-          return {
-            x: vel.x - 2 * dot * nx,
-            y: vel.y - 2 * dot * ny,
-          };
+          return { x: vel.x - 2 * dot * nx, y: vel.y - 2 * dot * ny };
         }
 
-        // ── NEW: OFFSCREEN MASK‐BASED WALL GENERATION ────────────────
-        const MASK_BUFFER = MIN_SEP; // how far from an existing wall is forbidden
+        // Wall Generation
+        const MASK_BUFFER = MIN_SEP;
 
         function overlapsMask(A, B, maskCtx) {
-          // sample along the segment; if any pixel in the mask has alpha>0, we collide
           const steps = 20;
           for (let i = 0; i <= steps; i++) {
             const t = i / steps;
@@ -133,13 +140,11 @@
         }
 
         function generateWalls() {
-          // 1) create offscreen mask
           const maskCan = document.createElement("canvas");
           maskCan.width = W;
           maskCan.height = H;
           const maskCtx = maskCan.getContext("2d");
 
-          // 2) mark the edge‐margin as forbidden
           maskCtx.fillStyle = "rgba(255,255,255,1)";
           maskCtx.fillRect(0, 0, W, MARGIN);
           maskCtx.fillRect(0, H - MARGIN, W, MARGIN);
@@ -149,7 +154,6 @@
           walls = [];
           let tries = 0;
           while (walls.length < NUM_WALLS && tries++ < 5000) {
-            // pick orientation & length
             const θ = ORIENTS[Math.floor(Math.random() * ORIENTS.length)];
             const len = rand(MIN_LEN, MAX_LEN);
             const dx = (Math.cos(θ) * len) / 2,
@@ -159,15 +163,11 @@
             const A = { x: cx - dx, y: cy - dy };
             const B = { x: cx + dx, y: cy + dy };
 
-            // reject if it hits any forbidden (masked) pixel
             if (overlapsMask(A, B, maskCtx)) continue;
 
-            // accept it
             walls.push({ A, B, theta: θ });
 
-            // now "color" its BUFFER‐zone onto the mask
-            // Add extra padding beyond the minimum separation
-            const extraPadding = 20; // Additional padding beyond MIN_SEP
+            const extraPadding = 20;
             maskCtx.strokeStyle = "rgba(255,255,255,1)";
             maskCtx.lineWidth = (MASK_BUFFER + extraPadding) * 2;
             maskCtx.beginPath();
@@ -175,7 +175,6 @@
             maskCtx.lineTo(B.x, B.y);
             maskCtx.stroke();
 
-            // Add extra padding at endpoints (circular buffer zones)
             maskCtx.fillStyle = "rgba(255,255,255,1)";
             const endpointRadius = MASK_BUFFER + extraPadding;
             maskCtx.beginPath();
@@ -187,26 +186,10 @@
           }
         }
 
-        // ── end of new wall‐generation block ───────────────────────────
-
-        // ── LEVEL & UI ─────────────────────────────────────────────────
-        function updateUI() {
-          levelEl.textContent = level;
-          topSpeedEl.textContent = topSpeed.toFixed(2);
-        }
-
+        // Level Management
         function nextLevel() {
           level++;
           topSpeed = BASE_SPEED + SPEED_INC * (level - 1);
-          resetRound();
-        }
-
-        function gameOver() {
-          alert(
-            "Game Over! You hit a wall or the mouse escaped. Back to level 1.",
-          );
-          level = 1;
-          topSpeed = BASE_SPEED;
           resetRound();
         }
 
@@ -214,43 +197,34 @@
           mousePos = { x: W / 2, y: H / 2 };
           mouseVel = { x: 0, y: 0 };
           allowCatch = false;
-          wanderTarget = {
-            x: rand(MARGIN, W - MARGIN),
-            y: rand(MARGIN, H - MARGIN),
-          };
+          wanderTarget = { x: rand(MARGIN, W - MARGIN), y: rand(MARGIN, H - MARGIN) };
           wanderTime = rand(2, 5);
           generateWalls();
-          updateUI();
+          levelStartTime = performance.now(); // Set level start time for grace period
         }
 
-        // ── WANDER ──────────────────────────────────────────────────────
+        // Mouse Wander Logic
         function updateWander(dt) {
           wanderTime -= dt;
           if (wanderTime <= 0) {
-            wanderTarget = {
-              x: rand(MARGIN, W - MARGIN),
-              y: rand(MARGIN, H - MARGIN),
-            };
+            wanderTarget = { x: rand(MARGIN, W - MARGIN), y: rand(MARGIN, H - MARGIN) };
             wanderTime = rand(2, 5);
           }
         }
 
-        // ── MOUSE AI + COLLISIONS ──────────────────────────────────────
+        // Mouse AI and Collisions
         function updateMouse(dt) {
           const oldPos = { ...mousePos };
-
-          // 1) flee
           let fx = mousePos.x - cursorPos.x,
             fy = mousePos.y - cursorPos.y;
           const fd = Math.hypot(fx, fy) || 1;
           fx /= fd;
           fy /= fd;
 
-          // 2) wall avoidance - FIXED!
           let ax = 0,
             ay = 0;
-          const AVOID_DIST = 100; // Increased from 60
-          const AVOID_STRENGTH = 3.0; // New multiplier for wall avoidance
+          const AVOID_DIST = 100;
+          const AVOID_STRENGTH = 3.0;
 
           for (let w of walls) {
             const a = w.A,
@@ -259,10 +233,7 @@
               vy = b.y - a.y;
             const wx = mousePos.x - a.x,
               wy = mousePos.y - a.y;
-            const t = Math.max(
-              0,
-              Math.min(1, (vx * wx + vy * wy) / (vx * vx + vy * vy)),
-            );
+            const t = Math.max(0, Math.min(1, (vx * wx + vy * wy) / (vx * vx + vy * vy)));
             const cx = a.x + t * vx;
             const cy = a.y + t * vy;
             const dist = Math.hypot(mousePos.x - cx, mousePos.y - cy);
@@ -270,39 +241,28 @@
             if (dist < AVOID_DIST) {
               let rx = mousePos.x - cx,
                 ry = mousePos.y - cy;
-
-              // If point is exactly on the wall, nudge it slightly
               if (rx === 0 && ry === 0) {
                 rx = Math.random() * 0.2 - 0.1;
                 ry = Math.random() * 0.2 - 0.1;
               }
-
               const rlen = Math.hypot(rx, ry) || 0.1;
               rx /= rlen;
               ry /= rlen;
-
-              // Calculate avoidance force with inverse square falloff
               const force = AVOID_STRENGTH * Math.pow(1 - dist / AVOID_DIST, 2);
               ax += rx * force;
               ay += ry * force;
             }
           }
 
-          // 3) boundary avoidance
           let bx = 0,
             by = 0;
-          if (mousePos.x < BOUND_AVOID)
-            bx += (BOUND_AVOID - mousePos.x) / BOUND_AVOID;
-          if (mousePos.x > W - BOUND_AVOID)
-            bx -= (mousePos.x - (W - BOUND_AVOID)) / BOUND_AVOID;
-          if (mousePos.y < BOUND_AVOID)
-            by += (BOUND_AVOID - mousePos.y) / BOUND_AVOID;
-          if (mousePos.y > H - BOUND_AVOID)
-            by -= (mousePos.y - (H - BOUND_AVOID)) / BOUND_AVOID;
+          if (mousePos.x < BOUND_AVOID) bx += (BOUND_AVOID - mousePos.x) / BOUND_AVOID;
+          if (mousePos.x > W - BOUND_AVOID) bx -= (mousePos.x - (W - BOUND_AVOID)) / BOUND_AVOID;
+          if (mousePos.y < BOUND_AVOID) by += (BOUND_AVOID - mousePos.y) / BOUND_AVOID;
+          if (mousePos.y > H - BOUND_AVOID) by -= (mousePos.y - (H - BOUND_AVOID)) / BOUND_AVOID;
           ax += bx * BOUND_FORCE;
           ay += by * BOUND_FORCE;
 
-          // 4) wander
           updateWander(dt);
           let tx = wanderTarget.x - mousePos.x,
             ty = wanderTarget.y - mousePos.y;
@@ -310,34 +270,27 @@
           tx /= td;
           ty /= td;
 
-          // 5) jitter – small normally, big if almost stalled
           const speedEst = Math.hypot(mouseVel.x, mouseVel.y);
-          const JITTER_SMALL = 0.05, // Increased from 0.0
-            JITTER_BIG = 0.2; // Increased from 0.0
-          const jitterMag =
-            speedEst < topSpeed * 0.3 ? JITTER_BIG : JITTER_SMALL;
+          const JITTER_SMALL = 0.05,
+            JITTER_BIG = 0.2;
+          const jitterMag = speedEst < topSpeed * 0.3 ? JITTER_BIG : JITTER_SMALL;
           const jx = (Math.random() * 2 - 1) * jitterMag;
           const jy = (Math.random() * 2 - 1) * jitterMag;
 
-          // 6) combine & normalize - WEIGHTS ADJUSTED
           const FLEE_W = 1.2,
-            AVOID_W = 2.0, // Increased from 1.0
-            WANDER_W = 0.4; // Decreased from 0.6
+            AVOID_W = 2.0,
+            WANDER_W = 0.4;
           let vx = fx * FLEE_W + ax * AVOID_W + tx * WANDER_W + jx,
             vy = fy * FLEE_W + ay * AVOID_W + ty * WANDER_W + jy;
           const vlen = Math.hypot(vx, vy) || 1;
           vx /= vlen;
           vy /= vlen;
 
-          // 7) speed
           const k = 0.2,
             speed = Math.min(topSpeed + k * cursorSpeed, topSpeed * 1.5);
-
-          // Check ahead for potential collisions
           let newVel = { x: vx * speed, y: vy * speed },
             newPos = { x: oldPos.x + newVel.x, y: oldPos.y + newVel.y };
 
-          // 8) wall collision & reflect
           let collision = false;
           for (let w of walls) {
             if (segIntersect(oldPos, newPos, w.A, w.B)) {
@@ -350,38 +303,21 @@
             }
           }
 
-          // 9) smoothing (less smoothing after collision)
           const smoothFactor = collision ? 0.5 : SMOOTHING_FACTOR;
-          mouseVel.x =
-            mouseVel.x * smoothFactor + newVel.x * (1 - smoothFactor);
-          mouseVel.y =
-            mouseVel.y * smoothFactor + newVel.y * (1 - smoothFactor);
+          mouseVel.x = mouseVel.x * smoothFactor + newVel.x * (1 - smoothFactor);
+          mouseVel.y = mouseVel.y * smoothFactor + newVel.y * (1 - smoothFactor);
           mousePos.x = oldPos.x + mouseVel.x;
           mousePos.y = oldPos.y + mouseVel.y;
 
-          // 10) clamp & bounce edges
-          if (mousePos.x < 0) {
-            mousePos.x = 0;
-            mouseVel.x *= -0.5;
-          }
-          if (mousePos.x > W) {
-            mousePos.x = W;
-            mouseVel.x *= -0.5;
-          }
-          if (mousePos.y < 0) {
-            mousePos.y = 0;
-            mouseVel.y *= -0.5;
-          }
-          if (mousePos.y > H) {
-            mousePos.y = H;
-            mouseVel.y *= -0.5;
-          }
+          if (mousePos.x < 0) { mousePos.x = 0; mouseVel.x *= -0.5; }
+          if (mousePos.x > W) { mousePos.x = W; mouseVel.x *= -0.5; }
+          if (mousePos.y < 0) { mousePos.y = 0; mouseVel.y *= -0.5; }
+          if (mousePos.y > H) { mousePos.y = H; mouseVel.y *= -0.5; }
         }
 
-        // ── RENDER ─────────────────────────────────────────────────────
+        // Rendering Functions
         function draw() {
           ctx.clearRect(0, 0, W, H);
-          // walls
           ctx.strokeStyle = "#333";
           ctx.lineWidth = 4;
           walls.forEach((w) => {
@@ -390,78 +326,136 @@
             ctx.lineTo(w.B.x, w.B.y);
             ctx.stroke();
           });
-          // mouse
           ctx.fillStyle = "gray";
           ctx.beginPath();
           ctx.arc(mousePos.x, mousePos.y, 10, 0, 2 * Math.PI);
           ctx.fill();
-          // cursor
           ctx.fillStyle = "red";
           ctx.beginPath();
           ctx.arc(cursorPos.x, cursorPos.y, CURSOR_RADIUS, 0, 2 * Math.PI);
           ctx.fill();
-
-          // Optional: Visualize the avoidance regions (uncomment to see)
-          /*
-          ctx.strokeStyle = "rgba(0,0,255,0.1)";
-          ctx.lineWidth = 200; // 2 * AVOID_DIST
-          walls.forEach((w) => {
-            ctx.beginPath();
-            ctx.moveTo(w.A.x, w.A.y);
-            ctx.lineTo(w.B.x, w.B.y);
-            ctx.stroke();
-          });
-          */
         }
 
-        // ── MAIN LOOP ──────────────────────────────────────────────────
+        function drawCongratsMessage() {
+          const elapsed = (performance.now() - levelCompleteStart) / 1000;
+          const animationDuration = 1;
+          let scale = 0.5 + 0.5 * (elapsed / animationDuration);
+          if (elapsed >= animationDuration) scale = 1;
+          const fontSize = 48 * scale;
+          ctx.save();
+          ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+          ctx.fillRect(0, 0, W, H);
+          ctx.font = `bold ${fontSize}px sans-serif`;
+          ctx.fillStyle = "white";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.shadowColor = "black";
+          ctx.shadowBlur = 10;
+          ctx.shadowOffsetX = 5;
+          ctx.shadowOffsetY = 5;
+          ctx.fillText(`Congratulations! Level ${level} Completed!`, W / 2, H / 2);
+          ctx.restore();
+        }
+
+        function drawGameOverMessage() {
+          const elapsed = (performance.now() - gameOverStart) / 1000;
+          const animationDuration = 1;
+          let scale = 0.5 + 0.5 * (elapsed / animationDuration);
+          if (elapsed >= animationDuration) scale = 1;
+          const fontSize = 48 * scale;
+          ctx.save();
+          ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+          ctx.fillRect(0, 0, W, H);
+          ctx.font = `bold ${fontSize}px sans-serif`;
+          ctx.fillStyle = "white";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.shadowColor = "black";
+          ctx.shadowBlur = 10;
+          ctx.shadowOffsetX = 5;
+          ctx.shadowOffsetY = 5;
+          ctx.fillText("Game Over", W / 2, H / 2);
+          ctx.restore();
+        }
+
+        // Main Game Loop
         let lastTime = performance.now();
         (function loop(now) {
           const dt = (now - lastTime) / 1000;
           lastTime = now;
 
-          updateMouse(dt);
-          draw();
-
-          if (allowCatch) {
-            const dx = mousePos.x - cursorPos.x,
-              dy = mousePos.y - cursorPos.y;
-            if (Math.hypot(dx, dy) < CATCH_DIST) {
+          if (gameState === "playing") {
+            updateMouse(dt);
+            draw();
+            if (allowCatch) {
+              const dx = mousePos.x - cursorPos.x,
+                dy = mousePos.y - cursorPos.y;
+              if (Math.hypot(dx, dy) < CATCH_DIST) {
+                gameState = "levelComplete";
+                levelCompleteStart = performance.now();
+              }
+            }
+          } else if (gameState === "levelComplete") {
+            draw();
+            drawCongratsMessage();
+            if (performance.now() - levelCompleteStart > 2000) {
               nextLevel();
+              gameState = "playing";
+            }
+          } else if (gameState === "gameOver") {
+            draw();
+            drawGameOverMessage();
+            if (performance.now() - gameOverStart > 2000) {
+              level = 1;
+              topSpeed = BASE_SPEED;
+              resetRound();
+              gameState = "playing";
             }
           }
 
           requestAnimationFrame(loop);
         })(lastTime);
 
-        // ── CURSOR TRACKING & GAME OVER ────────────────────────────────
+        // Cursor Tracking and Collision Detection
         canvas.addEventListener("mousemove", (e) => {
           const r = canvas.getBoundingClientRect();
           const x = e.clientX - r.left,
             y = e.clientY - r.top;
           const t = performance.now(),
             dt = (t - lastCursor.t) / 1000;
-          cursorSpeed =
-            dt > 0 ? Math.hypot(x - lastCursor.x, y - lastCursor.y) / dt : 0;
+          cursorSpeed = dt > 0 ? Math.hypot(x - lastCursor.x, y - lastCursor.y) / dt : 0;
           cursorPos = { x, y };
 
-          // touch a wall → game over
-          for (let w of walls) {
-            if (distPointSeg(cursorPos, w.A, w.B) < CURSOR_RADIUS) {
-              return gameOver();
+          if (gameState === "playing") {
+            // Check for wall collision only after 3-second grace period
+            if (performance.now() - levelStartTime > 3000) {
+              for (let w of walls) {
+                if (distPointSeg(cursorPos, w.A, w.B) < CURSOR_RADIUS) {
+                  gameState = "gameOver";
+                  gameOverStart = performance.now();
+                  return;
+                }
+              }
             }
-          }
-
-          // arm the catch once you've backed off
-          if (!allowCatch) {
-            const md = Math.hypot(mousePos.x - x, mousePos.y - y);
-            if (md > CATCH_DIST * 2) allowCatch = true;
+            if (!allowCatch) {
+              const md = Math.hypot(mousePos.x - x, mousePos.y - y);
+              if (md > CATCH_DIST * 2) allowCatch = true;
+            }
           }
 
           lastCursor = { x, y, t };
         });
 
-        // ── INIT ───────────────────────────────────────────────────────
+        // Window Resize Handler
+        window.addEventListener("resize", () => {
+          canvas.width = window.innerWidth;
+          canvas.height = window.innerHeight;
+          W = canvas.width;
+          H = canvas.height;
+          // Note: Walls may not adjust perfectly on resize
+        });
+
+        // Initialize Game
         resetRound();
       })();
     </script>
