@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Catch Me – Random Obstacle Playground Demo</title>
+  <style>
+    body { text-align: center; font-family: sans-serif; }
+    canvas { border: 1px solid #333; display: block; margin: 1em auto; background: #fafafa; }
+    button { padding: 0.5em 1em; font-size: 1em; }
+  </style>
+</head>
+<body>
+  <h2>Catch Me! – Playground with Random Walls</h2>
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+  <button id="changeLevel">Change Level</button>
+
+  <script>
+  (function() {
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+    const MARGIN = 40;
+    const NUM_LINES = 12;
+    const MIN_LEN = 120, MAX_LEN = 240;
+    const MIN_SEP = 30;  // min distance between any two walls
+    const ORIENTS = [0, 45, 90, 135].map(d=>d*Math.PI/180);
+
+    let walls = [];
+
+    // Utility: random in [min,max)
+    function rand(min, max){ return min + Math.random()*(max-min); }
+
+    // Check if two segments (p1→p2) and (p3→p4) intersect
+    function segIntersect(p1,p2,p3,p4){
+      function orient(a,b,c){
+        return (b.x-a.x)*(c.y-a.y) - (b.y-a.y)*(c.x-a.x);
+      }
+      const o1 = orient(p1,p2,p3),
+            o2 = orient(p1,p2,p4),
+            o3 = orient(p3,p4,p1),
+            o4 = orient(p3,p4,p2);
+      if (o1*o2<0 && o3*o4<0) return true;
+      return false;
+    }
+
+    // Distance from point p to segment (a→b)
+    function distPointSeg(p,a,b){
+      const vx = b.x - a.x, vy = b.y - a.y;
+      const wx = p.x - a.x, wy = p.y - a.y;
+      const c = (vx*wx + vy*wy)/(vx*vx + vy*vy);
+      let cx, cy;
+      if (c<0)      { cx = a.x; cy = a.y; }
+      else if (c>1) { cx = b.x; cy = b.y; }
+      else          { cx = a.x + c*vx; cy = a.y + c*vy; }
+      const dx = p.x - cx, dy = p.y - cy;
+      return Math.hypot(dx,dy);
+    }
+
+    // Min distance between two segments
+    function segDist(a,b,c,d){
+      if (segIntersect(a,b,c,d)) return 0;
+      return Math.min(
+        distPointSeg(a,c,d),
+        distPointSeg(b,c,d),
+        distPointSeg(c,a,b),
+        distPointSeg(d,a,b)
+      );
+    }
+
+    // Try to generate one random wall that meets all constraints
+    function makeWall(){
+      const θ = ORIENTS[Math.floor(Math.random()*ORIENTS.length)];
+      const len = rand(MIN_LEN, MAX_LEN);
+      const dx = Math.cos(θ)*len/2, dy = Math.sin(θ)*len/2;
+      // choose center so endpoints stay inside margins
+      const x = rand(MARGIN+Math.abs(dx), W-MARGIN-Math.abs(dx));
+      const y = rand(MARGIN+Math.abs(dy), H-MARGIN-Math.abs(dy));
+      const A = { x: x - dx, y: y - dy };
+      const B = { x: x + dx, y: y + dy };
+      // ensure not too close to existing walls
+      for (let w of walls) {
+        if (segIntersect(A,B,w.A,w.B)) return null;
+        if (segDist(A,B,w.A,w.B) < MIN_SEP) return null;
+      }
+      return {A,B};
+    }
+
+    function generateWalls(){
+      walls = [];
+      let attempts = 0;
+      while (walls.length < NUM_LINES && attempts < 5000){
+        const w = makeWall();
+        if (w) walls.push(w);
+        attempts++;
+      }
+      // if failed to get full count, that's OK — we draw what we have
+    }
+
+    function draw(){
+      ctx.clearRect(0,0,W,H);
+      // draw walls
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 4;
+      for (let w of walls){
+        ctx.beginPath();
+        ctx.moveTo(w.A.x,w.A.y);
+        ctx.lineTo(w.B.x,w.B.y);
+        ctx.stroke();
+      }
+      // placeholder: draw two players
+      ctx.fillStyle = 'red';
+      ctx.beginPath();
+      ctx.arc(60, 60, 12, 0,2*Math.PI);
+      ctx.fill();
+      ctx.fillStyle = 'blue';
+      ctx.beginPath();
+      ctx.arc(W-60, H-60, 12, 0,2*Math.PI);
+      ctx.fill();
+      // instructions
+      ctx.fillStyle = '#555';
+      ctx.font = '14px sans-serif';
+      ctx.fillText('Red = Runner, Blue = Chaser (move controls TBD)', 10,H-10);
+    }
+
+    // wire up “Change Level” button
+    document.getElementById('changeLevel')
+      .addEventListener('click', () => {
+        generateWalls();
+        draw();
+      });
+
+    // initial draw
+    generateWalls();
+    draw();
+
+  })();
+  </script>
+</body>
+</html>
