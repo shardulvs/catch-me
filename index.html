@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Catch the Mouse</title>
+    <title>Catch the Mouse</title>
     <style>
       body {
         text-align: center;
@@ -25,14 +25,14 @@
   <body>
     <div id="info">
       <span>Level: <strong id="level">1</strong></span>
-      <span>Top Speed: <strong id="topSpeed">—</strong> px/frame</span>
+      <span>Top Speed: <strong id="topSpeed">—</strong> px/frame</span>
     </div>
     <canvas id="gameCanvas" width="800" height="600"></canvas>
 
     <script>
       (function () {
         // ── CONFIG ─────────────────────────────────────────────────────
-        const BASE_SPEED = 1.0; // px/frame @ level 1
+        const BASE_SPEED = 1.0; // px/frame @ level 1
         const SPEED_INC = 0.5; // +px/frame per level
         const CATCH_DIST = 15; // px to catch
         const CURSOR_RADIUS = 6; // px
@@ -165,13 +165,25 @@
             // accept it
             walls.push({ A, B, theta: θ });
 
-            // now “color” its BUFFER‐zone onto the mask
+            // now "color" its BUFFER‐zone onto the mask
+            // Add extra padding beyond the minimum separation
+            const extraPadding = 20; // Additional padding beyond MIN_SEP
             maskCtx.strokeStyle = "rgba(255,255,255,1)";
-            maskCtx.lineWidth = MASK_BUFFER * 2;
+            maskCtx.lineWidth = (MASK_BUFFER + extraPadding) * 2;
             maskCtx.beginPath();
             maskCtx.moveTo(A.x, A.y);
             maskCtx.lineTo(B.x, B.y);
             maskCtx.stroke();
+
+            // Add extra padding at endpoints (circular buffer zones)
+            maskCtx.fillStyle = "rgba(255,255,255,1)";
+            const endpointRadius = MASK_BUFFER + extraPadding;
+            maskCtx.beginPath();
+            maskCtx.arc(A.x, A.y, endpointRadius, 0, Math.PI * 2);
+            maskCtx.fill();
+            maskCtx.beginPath();
+            maskCtx.arc(B.x, B.y, endpointRadius, 0, Math.PI * 2);
+            maskCtx.fill();
           }
         }
 
@@ -191,7 +203,7 @@
 
         function gameOver() {
           alert(
-            "Game Over! You hit a wall or the mouse escaped. Back to level 1.",
+            "Game Over! You hit a wall or the mouse escaped. Back to level 1.",
           );
           level = 1;
           topSpeed = BASE_SPEED;
@@ -234,10 +246,12 @@
           fx /= fd;
           fy /= fd;
 
-          // 2) wall avoidance
+          // 2) wall avoidance - FIXED!
           let ax = 0,
             ay = 0;
-          const AVOID_DIST = 60;
+          const AVOID_DIST = 100; // Increased from 60
+          const AVOID_STRENGTH = 3.0; // New multiplier for wall avoidance
+
           for (let w of walls) {
             const a = w.A,
               b = w.B;
@@ -245,19 +259,32 @@
               vy = b.y - a.y;
             const wx = mousePos.x - a.x,
               wy = mousePos.y - a.y;
-            const t = (vx * wx + vy * wy) / (vx * vx + vy * vy);
-            const cx = t < 0 ? a.x : t > 1 ? b.x : a.x + t * vx;
-            const cy = t < 0 ? a.y : t > 1 ? b.y : a.y + t * vy;
+            const t = Math.max(
+              0,
+              Math.min(1, (vx * wx + vy * wy) / (vx * vx + vy * vy)),
+            );
+            const cx = a.x + t * vx;
+            const cy = a.y + t * vy;
             const dist = Math.hypot(mousePos.x - cx, mousePos.y - cy);
+
             if (dist < AVOID_DIST) {
-              let rx = mousePos.x - cx || 1,
-                ry = mousePos.y - cy || 1;
-              const rlen = Math.hypot(rx, ry);
+              let rx = mousePos.x - cx,
+                ry = mousePos.y - cy;
+
+              // If point is exactly on the wall, nudge it slightly
+              if (rx === 0 && ry === 0) {
+                rx = Math.random() * 0.2 - 0.1;
+                ry = Math.random() * 0.2 - 0.1;
+              }
+
+              const rlen = Math.hypot(rx, ry) || 0.1;
               rx /= rlen;
               ry /= rlen;
-              const s = (AVOID_DIST - dist) / AVOID_DIST;
-              ax += rx * s;
-              ay += ry * s;
+
+              // Calculate avoidance force with inverse square falloff
+              const force = AVOID_STRENGTH * Math.pow(1 - dist / AVOID_DIST, 2);
+              ax += rx * force;
+              ay += ry * force;
             }
           }
 
@@ -285,17 +312,17 @@
 
           // 5) jitter – small normally, big if almost stalled
           const speedEst = Math.hypot(mouseVel.x, mouseVel.y);
-          const JITTER_SMALL = 0.0,
-            JITTER_BIG = 0.0;
+          const JITTER_SMALL = 0.05, // Increased from 0.0
+            JITTER_BIG = 0.2; // Increased from 0.0
           const jitterMag =
             speedEst < topSpeed * 0.3 ? JITTER_BIG : JITTER_SMALL;
           const jx = (Math.random() * 2 - 1) * jitterMag;
           const jy = (Math.random() * 2 - 1) * jitterMag;
 
-          // 6) combine & normalize
+          // 6) combine & normalize - WEIGHTS ADJUSTED
           const FLEE_W = 1.2,
-            AVOID_W = 1.0,
-            WANDER_W = 0.6;
+            AVOID_W = 2.0, // Increased from 1.0
+            WANDER_W = 0.4; // Decreased from 0.6
           let vx = fx * FLEE_W + ax * AVOID_W + tx * WANDER_W + jx,
             vy = fy * FLEE_W + ay * AVOID_W + ty * WANDER_W + jy;
           const vlen = Math.hypot(vx, vy) || 1;
@@ -306,12 +333,15 @@
           const k = 0.2,
             speed = Math.min(topSpeed + k * cursorSpeed, topSpeed * 1.5);
 
+          // Check ahead for potential collisions
           let newVel = { x: vx * speed, y: vy * speed },
             newPos = { x: oldPos.x + newVel.x, y: oldPos.y + newVel.y };
 
           // 8) wall collision & reflect
+          let collision = false;
           for (let w of walls) {
             if (segIntersect(oldPos, newPos, w.A, w.B)) {
+              collision = true;
               newVel = reflectVelocity(newVel, w);
               newVel.x *= 0.5;
               newVel.y *= 0.5;
@@ -320,11 +350,12 @@
             }
           }
 
-          // 9) smoothing
+          // 9) smoothing (less smoothing after collision)
+          const smoothFactor = collision ? 0.5 : SMOOTHING_FACTOR;
           mouseVel.x =
-            mouseVel.x * SMOOTHING_FACTOR + newVel.x * (1 - SMOOTHING_FACTOR);
+            mouseVel.x * smoothFactor + newVel.x * (1 - smoothFactor);
           mouseVel.y =
-            mouseVel.y * SMOOTHING_FACTOR + newVel.y * (1 - SMOOTHING_FACTOR);
+            mouseVel.y * smoothFactor + newVel.y * (1 - smoothFactor);
           mousePos.x = oldPos.x + mouseVel.x;
           mousePos.y = oldPos.y + mouseVel.y;
 
@@ -369,6 +400,18 @@
           ctx.beginPath();
           ctx.arc(cursorPos.x, cursorPos.y, CURSOR_RADIUS, 0, 2 * Math.PI);
           ctx.fill();
+
+          // Optional: Visualize the avoidance regions (uncomment to see)
+          /*
+          ctx.strokeStyle = "rgba(0,0,255,0.1)";
+          ctx.lineWidth = 200; // 2 * AVOID_DIST
+          walls.forEach((w) => {
+            ctx.beginPath();
+            ctx.moveTo(w.A.x, w.A.y);
+            ctx.lineTo(w.B.x, w.B.y);
+            ctx.stroke();
+          });
+          */
         }
 
         // ── MAIN LOOP ──────────────────────────────────────────────────
@@ -391,7 +434,7 @@
           requestAnimationFrame(loop);
         })(lastTime);
 
-        // ── CURSOR TRACKING & GAME OVER ────────────────────────────────
+        // ── CURSOR TRACKING & GAME OVER ────────────────────────────────
         canvas.addEventListener("mousemove", (e) => {
           const r = canvas.getBoundingClientRect();
           const x = e.clientX - r.left,
@@ -409,7 +452,7 @@
             }
           }
 
-          // arm the catch once you’ve backed off
+          // arm the catch once you've backed off
           if (!allowCatch) {
             const md = Math.hypot(mousePos.x - x, mousePos.y - y);
             if (md > CATCH_DIST * 2) allowCatch = true;
